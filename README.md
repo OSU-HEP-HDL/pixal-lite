@@ -7,3 +7,5 @@
   ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝    ╚══════╝╚═╝   ╚═╝   ╚══════╝
                     PIXAL-LITE – Validation Module
 ```
+
+Testing action
