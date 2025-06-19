@@ -1,0 +1,71 @@
+# *************** BASE PATH. DO NOT CHANGE ***************
+out_path: &base_path "./pixal/models/"
+validate_out_path: &validate_out_path "./validate"
+
+
+# ************** Path for component outputs **************
+component_model_path: &component_model_path 
+  component: "R0_DATA_FLEX_F1"
+  base: *base_path
+
+component_validate_path: &component_validate_path
+  component: "R0_DATA_FLEX_F1"
+  base: *validate_out_path
+
+# ********** DO NOT CHANGE THE FOLLOWING PATHS *********** 
+
+model_path: &model_path
+  model: "model"
+  base: *component_model_path
+
+reference_path: &reference_path
+  model: "reference"
+  base: *component_model_path
+
+metadata_path: &metadata_path
+  metadata: "metadata"
+  base: *component_model_path
+
+validate_log_path: &detect_log_path
+  log: "logs"
+  base: *component_validate_path
+
+validate_preprocessed_images_path: &validate_preprocessed_images_path
+  preprocessed_images: "preprocessed_images"
+  base: *component_validate_path
+
+validate_remove_background_path: &validate_remove_background_path
+  background_removed: "background_removed"
+  base: *validate_preprocessed_images_path
+
+validate_aligned_images_path: &validate_aligned_images_path
+  aligned_images: "aligned_images"
+  base: *validate_preprocessed_images_path
+
+validate_fig_path: &validate_fig_path
+  fig: "figures"
+  base: *component_validate_path
+
+validate_aligned_metrics_path: &validate_aligned_metrics_path
+  metrics: "aligned_metrics"
+  base: *validate_fig_path
+
+general_figures_path: &general_figures_path
+  general_figures: "figures"
+  base: ""
+
+general_preprocess_path: &general_preprocess_path
+  general_preprocess: "preprocessed_images"
+  base: ""
+
+general_remove_background_path: &general_remove_background_path
+  general_remove_background: "background_removed"
+  base: *general_preprocess_path
+
+general_aligned_images_path: &general_aligned_images_path
+  general_aligned_images: "aligned_images"
+  base: *general_preprocess_path
+
+general_aligned_metrics_path: &general_aligned_metrics_path
+  general_aligned_metrics: "aligned_metrics"
+  base: *general_figures_path

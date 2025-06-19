@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixal-lite"
+version = "0.1.0"
+description = "PIXel-based Anomaly Detection Tool for ATLAS Components"
+authors = [
+  { name="Dr. Jacob E. Crosby" }
+]
+dependencies = [
+  "rembg",
+  "pillow",
+  "paramiko",
+  "tensorflow",
+  "numpy",
+  "argparse",
+  "openhtf",
+  "pandas",
+  "pymongo",
+  "pyyaml",
+  "scikit-learn",
+  "opencv-python",
+  "numba",
+  "matplotlib",
+  "tqdm",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+gpu = ["onnxruntime-gpu"]
+mac = ["onnxruntime"]
+
+[project.scripts]
+pixal = "pixal.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pixal"]

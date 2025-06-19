@@ -1,0 +1,12 @@
+plotting:
+  loss_cut: 0.7
+  plot_abs_loss_per_pixel: true
+  plot_accuracy: true
+  plot_anomaly_heatmap: true
+  plot_confusion_matrix: false
+  plot_distributions: true
+  plot_loss: true
+  plot_mse_per_pixel: true
+  plot_pixel_predictions: true
+  plot_roc_recall_curve: true
+  use_log_loss: false

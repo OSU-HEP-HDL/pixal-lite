@@ -1,0 +1,30 @@
+crop_box:
+  padding: 5
+  x_max: 1629
+  x_min: 314
+  y_max: 711
+  y_min: 346
+preprocessing:
+  alignment:
+    MAX_MSE_THRESHOLD: 10.0
+    MIN_GOOD_MATCHES: 20
+    MIN_SCORE_THRESHOLD: 0.5
+    knn_ratio: 0.8
+    number_of_points: 5
+    ransac_threshold: 7.0
+  draw_matches: true
+  preprocessor:
+    bg_threshold: 15
+    channels:
+    - R
+    - G
+    - B
+    file_name: out.npz
+    pool_size: 2
+    zero_pruning: true
+    zero_pruning_padding: 5
+  remove_background:
+    max_workers: 8
+  rename_images: true
+  save_metrics: true
+  save_overlays: true
