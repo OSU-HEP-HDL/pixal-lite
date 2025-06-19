@@ -18,6 +18,7 @@ def main():
 
         # Validate
         detect_cmd = subparsers.add_parser("validate", help="Run validation (preprocess + detect) on new images")
+        detect_cmd.add_argument("--model","-m", required=True, help="Model path to use for validation")
         detect_cmd.add_argument("--input","-i", required=True, help="Folder with test images")
         detect_cmd.add_argument("--quiet", "-q", help="Quiet output", action="store_true")
 
@@ -32,7 +33,7 @@ def main():
         if args.command == "validate":
             if detect is None:
                 from pixal.validate import runner as validation_runner
-            validation_runner.run_validation(args.input,quiet=args.quiet)
+            validation_runner.run_validation(args.model, args.input, quiet=args.quiet)
         elif args.command == "detect":
             if detect is None:
                 from pixal.validate import runner as validation_runner
