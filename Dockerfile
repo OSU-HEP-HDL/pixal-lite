@@ -17,7 +17,7 @@ COPY . .
 
 # Install editable package
 RUN pip install --upgrade pip
-RUN pip install -e .
+RUN pip install -e .[gpu]
 
 # Run the validation pipeline on container start
 ENTRYPOINT ["pixal"]
