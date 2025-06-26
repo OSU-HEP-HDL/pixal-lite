@@ -23,6 +23,7 @@ dependencies = [
   "matplotlib",
   "tqdm",
   "pyyaml",
+
 ]
 
 [project.optional-dependencies]

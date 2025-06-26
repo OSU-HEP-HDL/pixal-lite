@@ -20,6 +20,8 @@ sys.stderr = stderr_backup
 
 path_config = load_config("configs/paths.yaml")
 
+metric_config = load_config("configs/metrics.yaml")
+
 log_path = resolve_path(path_config.validate_log_path)
 log_path.mkdir(parents=True, exist_ok=True)
 
@@ -45,29 +47,29 @@ def run_detection(dataset, model_path, metric_dir, one_hot_encoding, config=None
     metric_dir = Path(metric_dir)
     metric_dir.mkdir(parents=True, exist_ok=True)
 
-    if config.plotting.plot_distributions:
+    if metric_config.plotting.plot_distributions:
         pltm.plot_prediction_distribution(predictions, metric_dir)
         pltm.plot_truth_distribution(X_test, metric_dir)
         pltm.plot_combined_distribution(X_test, predictions, metric_dir)
 
-    if config.plotting.plot_anomaly_heatmap:
+    if metric_config.plotting.plot_anomaly_heatmap:
         pltm.plot_mse_heatmap_overlay(
             X_test, predictions, image_shape, metric_dir,
-            threshold=config.plotting.loss_cut, use_log_threshold=config.plotting.use_log_loss
+            threshold=metric_config.plotting.loss_cut, use_log_threshold=metric_config.plotting.use_log_loss
         )
 
-    if config.plotting.plot_roc_recall_curve:
+    if metric_config.plotting.plot_roc_recall_curve:
         pltm.plot_anomaly_detection_curves(X_test, predictions, '', metric_dir)
 
-    if config.plotting.plot_pixel_predictions:
+    if metric_config.plotting.plot_pixel_predictions:
         pltm.plot_pixel_predictions(X_test, predictions, "Pixel-wise Prediction Accuracy", metric_dir)
 
-    if config.plotting.plot_confusion_matrix:
+    if metric_config.plotting.plot_confusion_matrix:
         pltm.plot_confusion_matrix(X_test, predictions, metric_dir)
 
-    if config.plotting.plot_loss:
-        pltm.plot_pixel_loss_and_log_loss(X_test, predictions, metric_dir, loss_threshold=config.plotting.loss_cut)
-        pltm.plot_channelwise_pixel_loss(X_test, predictions, config, metric_dir, loss_threshold=config.plotting.loss_cut)
+    if metric_config.plotting.plot_loss:
+        pltm.plot_pixel_loss_and_log_loss(X_test, predictions, metric_dir, loss_threshold=metric_config.plotting.loss_cut)
+        pltm.plot_channelwise_pixel_loss(X_test, predictions, config, metric_dir, loss_threshold=metric_config.plotting.loss_cut)
 
 
 def run(npz_file, model_file, metric_dir, config=None, one_hot_encoding=False, quiet=False):

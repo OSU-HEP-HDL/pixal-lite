@@ -1,0 +1,18 @@
+#
+##
+###
+####
+##### ----> PLOTTING <----#####
+
+plotting:
+  plot_loss: True
+  plot_confusion_matrix: False
+  plot_roc_recall_curve: False
+  plot_anomaly_heatmap: True
+  plot_abs_loss_per_pixel: False
+  plot_mse_per_pixel: True
+  plot_pixel_predictions: True
+  plot_distributions: False
+
+  use_log_loss: False  # Use log loss for plotting
+  loss_cut: 0.7  # Cut off for loss plotting

@@ -44,17 +44,19 @@ def run_validation(model_dir, input_dir, config=None, quiet=False):
         config = _dict_to_namespace(config)
          
         reference_dir = resolve_path(Path(model_dir) / "reference")
-        base_path = resolve_path(Path(model_dir))
+        base_path = resolve_path(Path(input_dir))
         model_path = resolve_path(Path(model_dir) / "model")
 
          # Dynamically resolve per-type paths
         bg_removed_dir = base_path / resolve_path(path_config.general_remove_background_path)
         aligned_dir = base_path / resolve_path(path_config.general_aligned_images_path)
         reference_dir = resolve_path(reference_dir)  # assume same reference
-        metric_dir = base_path / resolve_path(path_config.general_aligned_metrics_path)
-        npz_dir = base_path 
+        metric_dir = input_dir / resolve_path(path_config.general_aligned_metrics_path)
+        output_dir = input_dir / resolve_path(path_config.general_figures_path)
+        npz_dir = base_path
 
         for d in [bg_removed_dir, aligned_dir, metric_dir, npz_dir]:
+            print(d)
             d.mkdir(parents=True, exist_ok=True)
 
         remove_background.run(input_dir, bg_removed_dir, config=config, quiet=quiet)
@@ -66,7 +68,7 @@ def run_validation(model_dir, input_dir, config=None, quiet=False):
                 "pixal/validate/validate_one_model.py",
                 "--npz", str(npz_dir),
                 "--model", str(model_path),
-                "--metrics", str(metric_dir),
+                "--metrics", str(output_dir),
                 "--config", str(config_path),
                 "--preprocess"
         ]
@@ -96,7 +98,7 @@ def run_validation(model_dir, input_dir, config=None, quiet=False):
             model_path = resolve_parent_inserted_path(Path(model_dir) / "model", type_folder.name,1) 
             print(f"Model path: {model_dir}")
 
-            base_path = resolve_path(Path(model_dir)) / type_folder.name
+            base_path = resolve_path(Path(input_dir)) / type_folder.name
            
             
             # Dynamically resolve per-type paths
@@ -104,6 +106,7 @@ def run_validation(model_dir, input_dir, config=None, quiet=False):
             aligned_dir = base_path / resolve_path(path_config.general_aligned_images_path)
             reference_dir = resolve_path(reference_dir)  # assume same reference
             metric_dir = base_path / resolve_path(path_config.general_aligned_metrics_path)
+            ad_metric_dir = base_path / resolve_path(path_config.general_figures_path)
             npz_dir = base_path 
 
             for d in [bg_removed_dir, aligned_dir, metric_dir, npz_dir]:
@@ -118,7 +121,7 @@ def run_validation(model_dir, input_dir, config=None, quiet=False):
                 "pixal/validate/validate_one_model.py",
                 "--npz", str(npz_dir),
                 "--model", str(model_path),
-                "--metrics", str(metric_dir),
+                "--metrics", str(ad_metric_dir),
                 "--config", str(config_path),
                 "--preprocess"
             ]
