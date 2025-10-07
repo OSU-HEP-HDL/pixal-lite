@@ -46,3 +46,5 @@ docker run --rm \
   -v $(pwd)/itk_testing/R0_DATA_FLEX_F1/20UPIPG9000023/VISUAL_INSPECTION/:/R0_DATA_FLEX_F1/20UPIPG9000023/VISUAL_INSPECTION \
   pixal-lite validate -m /model -i /R0_DATA_FLEX_F1/20UPIPG9000023/VISUAL_INSPECTION 
 ```
+
+Everything subject to change
