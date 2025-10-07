@@ -38,7 +38,3 @@ detect.run(args.npz, args.model, args.metrics, config=config, one_hot_encoding=a
 # Clean up TensorFlow context
 K.clear_session()
 gc.collect()
-
-# Reset GPU driver context
-cuda.select_device(0)
-cuda.close()

@@ -19,8 +19,7 @@ sys.stderr.close()
 sys.stderr = stderr_backup
 
 path_config = load_config("configs/paths.yaml")
-
-metric_config = load_config("configs/metrics.yaml")
+#loss_config = load_config("configs/parameters.yaml")
 
 log_path = resolve_path(path_config.validate_log_path)
 log_path.mkdir(parents=True, exist_ok=True)
@@ -39,7 +38,7 @@ def run_detection(dataset, model_path, metric_dir, one_hot_encoding, config=None
     if one_hot_encoding and y_test is not None:
         y_test = y_test.reshape(y_test.shape[0], -1)
    
-    print("model path: ", model_path)
+  
     model = autoencoder.Autoencoder.load_model(model_path,config)
     inputs = [X_test, y_test] if one_hot_encoding else X_test
     predictions = model.predict(inputs)
@@ -47,30 +46,31 @@ def run_detection(dataset, model_path, metric_dir, one_hot_encoding, config=None
     metric_dir = Path(metric_dir)
     metric_dir.mkdir(parents=True, exist_ok=True)
 
-    if metric_config.plotting.plot_distributions:
+    if config.plotting.plot_distributions:
         pltm.plot_prediction_distribution(predictions, metric_dir)
         pltm.plot_truth_distribution(X_test, metric_dir)
         pltm.plot_combined_distribution(X_test, predictions, metric_dir)
 
-    if metric_config.plotting.plot_anomaly_heatmap:
+    if config.plotting.plot_anomaly_heatmap:
         pltm.plot_mse_heatmap_overlay(
-            X_test, predictions, image_shape, metric_dir,
-            threshold=metric_config.plotting.loss_cut, use_log_threshold=metric_config.plotting.use_log_loss
+            X_test, predictions, image_shape, metric_dir, num_vars = len(config.preprocessing.preprocessor.channels),
+            threshold=config.plotting.loss_cut, use_log_threshold=config.plotting.use_log_loss
         )
 
-    if metric_config.plotting.plot_roc_recall_curve:
+    if config.plotting.plot_roc_recall_curve:
         pltm.plot_anomaly_detection_curves(X_test, predictions, '', metric_dir)
 
-    if metric_config.plotting.plot_pixel_predictions:
+    if config.plotting.plot_pixel_predictions:
         pltm.plot_pixel_predictions(X_test, predictions, "Pixel-wise Prediction Accuracy", metric_dir)
 
-    if metric_config.plotting.plot_confusion_matrix:
+    if config.plotting.plot_confusion_matrix:
         pltm.plot_confusion_matrix(X_test, predictions, metric_dir)
 
-    if metric_config.plotting.plot_loss:
-        pltm.plot_pixel_loss_and_log_loss(X_test, predictions, metric_dir, loss_threshold=metric_config.plotting.loss_cut)
-        pltm.plot_channelwise_pixel_loss(X_test, predictions, config, metric_dir, loss_threshold=metric_config.plotting.loss_cut)
-
+    if config.plotting.plot_loss:
+        pltm.plot_pixel_loss_and_log_loss(X_test, predictions, metric_dir, loss_threshold=config.plotting.loss_cut)
+        pltm.plot_channelwise_pixel_loss(X_test, predictions, config, metric_dir, loss_threshold=config.plotting.loss_cut)
+    
+    pltm.plot_mse_heatmap(X_test, predictions, image_shape, output_dir=metric_dir.parent, threshold=config.plotting.loss_cut, use_log_threshold=False, channels=config.preprocessing.preprocessor.channels,weights=config.preprocessing.preprocessor.weights,max_images=1)
 
 def run(npz_file, model_file, metric_dir, config=None, one_hot_encoding=False, quiet=False):
     npz_file = Path(npz_file) / config.preprocessing.preprocessor.file_name

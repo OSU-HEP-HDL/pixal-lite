@@ -1,6 +1,7 @@
 # *************** BASE PATH. DO NOT CHANGE ***************
 out_path: &base_path "./pixal/models/"
 validate_out_path: &validate_out_path "./validate"
+base_log_path: &base_log_path "./logs/"
 
 
 # ************** Path for component outputs **************

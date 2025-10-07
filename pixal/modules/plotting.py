@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from pixal.modules.config_loader import load_config, resolve_path, configure_pixal_logger
+from pixal.modules.config_loader import load_config, resolve_path, configure_pixal_logger, deep_getattr
 from sklearn.metrics import roc_curve, precision_recall_curve, auc, confusion_matrix, ConfusionMatrixDisplay
 import itertools
 import cv2
@@ -18,130 +18,248 @@ log_file = log_path / "detect.log"
 
 logger = configure_pixal_logger(log_file)
 
-def plot_mse_heatmap(X_test, predictions, output_dir="mse_plots"):
+import os
+from pathlib import Path
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import logging
+
+logger = logging.getLogger(__name__)
+
+import os
+from pathlib import Path
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import logging
+
+logger = logging.getLogger(__name__)
+
+def plot_mse_heatmap(
+    X_test,
+    predictions,
+    image_shape,                  # (H, W)
+    output_dir,                   # Path or str
+    threshold,                    # float; your loss_cut
+    use_log_threshold=False,
+    channels=None,                # list[str] (e.g., ["R","G","B","LAB_a",...]) or None
+    weights=None,                 # list[float] same length as channels, or None
+    max_images=5,
+):
+    """
+    Create weighted per-pixel MSE maps between X_test and predictions, then overlay anomalies
+    (pixels where error >= threshold) on the original image when RGB is available. If RGB is not
+    available, uses a normalized grayscale base from the available channels.
+
+    Output: ONLY the overlay image (no side-by-side). Returns list of saved file paths.
+    """
+
+    H, W = image_shape
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    N = min(max_images, len(X_test))
+    eps = 1e-8
+
+    # Infer channel count C
+    flat_len = int(np.asarray(X_test[0]).size)
+    if flat_len % (H * W) != 0:
+        raise ValueError(
+            f"Input length {flat_len} not divisible by H*W={H*W}. "
+            "Check image_shape or feature vector size."
+        )
+    C = flat_len // (H * W)
+
+    # Validate channels/weights
+    if channels is not None and len(channels) != C:
+        raise ValueError(f"len(channels)={len(channels)} must equal inferred C={C}.")
+    if weights is None:
+        w = np.ones((C,), dtype=np.float32)
+    else:
+        if len(weights) != C:
+            raise ValueError(f"len(weights)={len(weights)} must equal C={C}.")
+        w = np.asarray(weights, dtype=np.float32)
+    w_sum = float(np.sum(w)) if np.any(w) else 1.0
+
+    # Helper: try to build an RGB base from channels; otherwise fallback
+    def make_base_bgr(ch_stack):
+        """
+        ch_stack: (H, W, C) float array (any scale)
+        Returns uint8 BGR image for overlay base.
+        """
+        base = None
+        if channels is not None:
+            try:
+                r_idx = channels.index("R")
+                g_idx = channels.index("G")
+                b_idx = channels.index("B")
+
+                def to_u8(x):
+                    x = np.asarray(x, dtype=np.float32)
+                    x_min, x_max = float(x.min()), float(x.max())
+                    if x_max - x_min < 1e-12:
+                        return np.zeros_like(x, dtype=np.uint8)
+                    return ((x - x_min) / (x_max - x_min) * 255.0).astype(np.uint8)
+
+                R = to_u8(ch_stack[..., r_idx])
+                G = to_u8(ch_stack[..., g_idx])
+                B = to_u8(ch_stack[..., b_idx])
+                rgb = np.stack([R, G, B], axis=-1)
+                base = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            except ValueError:
+                base = None
+
+        if base is None:
+            # Fallback: average the first up to 3 channels, normalize to 0..255
+            use_c = min(C, 3)
+            gray = np.mean(ch_stack[..., :use_c], axis=-1).astype(np.float32)
+            gmin, gmax = float(gray.min()), float(gray.max())
+            if gmax - gmin < 1e-12:
+                gray_u8 = np.zeros_like(gray, dtype=np.uint8)
+            else:
+                gray_u8 = ((gray - gmin) / (gmax - gmin) * 255.0).astype(np.uint8)
+            base = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR)
+
+        return base
+
+    saved_paths = []
+
+    for i in range(N):
+        orig_flat = np.asarray(X_test[i], dtype=np.float32)
+        pred_flat = np.asarray(predictions[i], dtype=np.float32)
+
+        # Reshape to (H, W, C)
+        orig = orig_flat.reshape(H, W, C)
+        pred = pred_flat.reshape(H, W, C)
+
+        # Weighted per-pixel MSE across channels
+        diff = orig - pred                      # (H, W, C)
+        sq = diff * diff                        # (H, W, C)
+        error_map = np.tensordot(sq, w, axes=([2], [0])) / w_sum  # (H, W)
+
+        # Threshold domain (raw or log)
+        if use_log_threshold:
+            vis_map = np.log10(error_map + eps)
+            thr_value = np.log10(max(threshold, eps))
+        else:
+            vis_map = error_map
+            thr_value = float(threshold)
+
+        # Normalize error map to [0,1] for colormap
+        vmin, vmax = float(vis_map.min()), float(vis_map.max())
+        denom = (vmax - vmin) if (vmax > vmin) else 1.0
+        norm = (vis_map - vmin) / (denom + eps)
+
+        # Build overlay
+        base_bgr = make_base_bgr(orig)
+        heat_u8 = (np.clip(norm, 0, 1) * 255).astype(np.uint8)
+        heat_bgr = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
+
+        overlay = cv2.addWeighted(base_bgr, 0.60, heat_bgr, 0.40, 0.0)
+
+        # Hard mark anomalies in RED (BGR)
+        mask = (vis_map >= thr_value).astype(np.uint8)
+        overlay[mask == 1] = [0, 0, 255]  # pure red in BGR
+
+        # Save ONLY the overlay (no figure, no borders)
+        out_path = output_dir / f"mse_overlay_{i}.png"
+        ok = cv2.imwrite(str(out_path), overlay)
+        if not ok:
+            logger.warning(f"Failed to save overlay for image {i} at {out_path}")
+
+        # Stats
+        pct = 100.0 * mask.sum() / mask.size
+        logger.info(
+            f"[Image {i}] Anomalous pixels: {int(mask.sum()):,} ({pct:.2f}%), "
+            f"C={C}, saved: {out_path}"
+        )
+        saved_paths.append(out_path)
+
+    return saved_paths
+
+
+
+
+def plot_mse_heatmap_overlay(X_test, predictions, image_shape, output_dir="analysis_plots",
+                             num_vars=3, threshold=0.01, use_log_threshold=False):
     """
     Computes per-pixel MSE and overlays an anomaly heatmap on the original images.
-    
-    Parameters:
-        model: Trained Autoencoder model.
-        X_test: Test images (flattened).
-        y_test: Corresponding labels.
-        output_dir: Directory to save plots.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Compute per-pixel MSE
-    mse = np.mean((X_test - predictions) ** 2, axis=1)  # Mean MSE per image
-    pixel_mse = np.mean((X_test - predictions) ** 2, axis=0)  # Mean MSE per pixel across dataset
-
-    logger.info(f"Mean MSE across test set: {np.mean(mse):.6f}")
-
-    # Iterate over images
-    for i in range(min(5, len(X_test))):  # Show first 5 images
-        original = X_test[i].reshape(90, 90)  # Reshape to image size (adjust as needed)
-        reconstructed = predictions[i].reshape(90, 90)
-
-        # Compute per-pixel error (reshaped)
-        error_map = ((X_test[i] - predictions[i]) ** 2).reshape(90, 90)
-
-        # Normalize error map for visualization
-        norm_error_map = cv2.normalize(error_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        heatmap = cv2.applyColorMap(norm_error_map, cv2.COLORMAP_JET)
-
-        # Overlay heatmap on the original image
-        overlay = cv2.addWeighted(cv2.cvtColor(original.astype(np.uint8), cv2.COLOR_GRAY2BGR), 0.5, heatmap, 0.5, 0)
-
-        # Save and display results
-        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-        axes[0].imshow(original, cmap="gray")
-        axes[0].set_title("Original Image")
-        axes[1].imshow(overlay)
-        axes[1].set_title("Anomaly Heatmap")
-        axes[2].imshow(reconstructed, cmap="gray")
-        axes[2].set_title("Reconstructed Image")
-
-        for ax in axes:
-            ax.axis("off")
-
-        plt.savefig(os.path.join(output_dir, f"mse_heatmap_{i}.png"))
-        plt.show()
-
-    return mse
-
-
-def plot_mse_heatmap_overlay(X_test, predictions, image_shape, output_dir="analysis_plots", threshold=0.01, use_log_threshold=False):
-    """
-    Computes per-pixel MSE and overlays an anomaly heatmap on the original images.
-
-    Parameters:
-        model: Trained Autoencoder model.
-        X_test: Test images (flattened).
-        y_test: Corresponding one-hot labels.
-        image_shape: Tuple representing the (height, width) of the original image.
-        output_dir: Directory to save plots.
-        threshold: MSE value above which pixels are considered anomalous.
-    """
-    os.makedirs(output_dir, exist_ok=True)
+    height, width = image_shape
 
     for i in range(min(5, len(X_test))):  # Limit to first 5 examples
-
         original_flat = X_test[i]
         reconstructed_flat = predictions[i]
-        height, width = image_shape
-        
-        original_img = original_flat.reshape((height, width, 3))
-        avg_original_img = np.mean(original_img, axis=-1)  # Shape becomes (height, width)
-        reconstructed_img = reconstructed_flat.reshape((height, width, 3))
-        avg_reconstructed_img = np.mean(reconstructed_img, axis=-1)  # Shape becomes (height, width)
 
-        # Compute per-pixel squared error
-        error_map = np.mean(np.square(original_img - reconstructed_img), axis=-1)
+        # Infer channel count if not 3/unsure
+        inferred_vars = original_flat.size // (height * width)
+        if inferred_vars > 0 and inferred_vars != num_vars:
+            num_vars = inferred_vars  # keep function resilient
 
+        original_img = original_flat.reshape((height, width, num_vars))
+        reconstructed_img = reconstructed_flat.reshape((height, width, num_vars))
 
-        # Apply log transformation if requested
+        # 2D grayscale for display
+        avg_original_img = np.mean(original_img, axis=-1)
+        avg_reconstructed_img = np.mean(reconstructed_img, axis=-1)
+
+        # Per-pixel MSE across channels
+        error_map = np.mean((original_img - reconstructed_img) ** 2, axis=-1).astype(np.float32)
+
+        # Optional log thresholding
         if use_log_threshold:
-            error_map = np.log10(error_map + 1e-8)  # shift to avoid log(0)
+            error_map = np.log10(error_map + 1e-8)
             threshold_label = f"log10({threshold})"
             threshold_value = np.log10(threshold)
         else:
             threshold_label = f"{threshold}"
             threshold_value = threshold
 
-        # Normalize the error map for heatmap visualization
-        norm_error_map = (error_map - np.min(error_map)) / (np.max(error_map) - np.min(error_map) + 1e-8)
+        # Normalize error map to [0,1] for colormap
+        emn, emx = float(error_map.min()), float(error_map.max())
+        norm_error_map = (error_map - emn) / (emx - emn + 1e-8)
 
-        # Create anomaly mask
+        # Anomaly mask and stats
         anomaly_mask = (error_map >= threshold_value).astype(np.uint8)
         num_pixels = anomaly_mask.size
-        num_anomalous = np.sum(anomaly_mask)
-        percent = (num_anomalous / num_pixels) * 100
-
+        num_anomalous = int(anomaly_mask.sum())
+        percent = (num_anomalous / num_pixels) * 100.0
         logger.info(f"[Image {i}] Anomalous Pixels: {num_anomalous:,}  Percentage: {percent:.2f}%")
 
-        # Prepare image for overlay
-        original_bgr = cv2.cvtColor((avg_original_img * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-        heatmap_raw = (norm_error_map * 255).astype(np.uint8)
-        heatmap_color = cv2.applyColorMap(heatmap_raw, cv2.COLORMAP_JET)
+        # Prepare overlay (base is grayscale -> BGR for OpenCV)
+        original_bgr = cv2.cvtColor(
+            np.clip(avg_original_img * 255.0, 0, 255).astype(np.uint8),
+            cv2.COLOR_GRAY2BGR
+        )
+        heatmap_raw = np.clip(norm_error_map * 255.0, 0, 255).astype(np.uint8)
+        heatmap_color_bgr = cv2.applyColorMap(heatmap_raw, cv2.COLORMAP_JET)
 
-        overlay = cv2.addWeighted(original_bgr, 0.6, heatmap_color, 0.4, 0)
-        overlay[anomaly_mask == 1] = [255, 0, 0]
+        overlay_bgr = cv2.addWeighted(original_bgr, 0.6, heatmap_color_bgr, 0.4, 0)
+        # Paint anomalies in RED (BGR -> red is [0,0,255])
+        overlay_bgr[anomaly_mask == 1] = [0, 0, 255]
+
+        # Convert BGR -> RGB for matplotlib
+        overlay_rgb = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
 
         # Plot
         fig, axes = plt.subplots(1, 2, figsize=(15, 4))
-        axes[0].imshow(original_img, cmap="gray")
-        axes[0].set_title("Original")
-        axes[1].imshow(overlay)
+        axes[0].imshow(avg_original_img, cmap="gray")
+        axes[0].set_title("Original (avg across channels)")
+        axes[1].imshow(overlay_rgb)
         axes[1].set_title(f"Heatmap (Threshold: {threshold_label})")
-
         for ax in axes:
             ax.axis("off")
-
         plt.tight_layout()
+
         output_path = os.path.join(output_dir, f"anomaly_overlay_{i}.png")
-        plt.savefig(output_path)
-        plt.close()
+        plt.savefig(output_path, dpi=150)
+        plt.close(fig)
 
         logger.info(f"[✓] Heatmap Saved: {output_path}")
+
 
 
 def analyze_mse_distribution(X_test, predictions, image_shape, output_dir="analysis_plots"):
@@ -497,7 +615,8 @@ def plot_channelwise_pixel_loss(x_true, x_pred, config, output_dir="analysis_plo
     os.makedirs(output_dir, exist_ok=True)
 
     # Extract channels from config or default to RGB
-    channels = getattr(getattr(config, 'preprocessor', {}), 'channels', ['R', 'G', 'B'])
+    channels = deep_getattr(config, "preprocessing.preprocessor.channels", ["R", "G", "B"])
+
     channel_map = {'H': "Hue", 'S': "Saturation", 'V': "Value",
                    'R': "Red", 'G': "Green", 'B': "Blue"}
     color_defaults = {'R': 'red', 'G': 'green', 'B': 'blue',

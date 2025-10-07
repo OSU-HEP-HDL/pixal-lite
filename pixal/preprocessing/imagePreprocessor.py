@@ -32,6 +32,110 @@ class ImageDataProcessor:
         self.crop_box = crop_box
         self.validation = validation
 
+    def compute_feature_maps(self, bgr_image: np.ndarray) -> dict:
+        """
+        Returns a dict of single-channel float32 feature maps in [0,1] (except sin/cos which are [-1,1] then remapped).
+        Keys are stable and documented below.
+        """
+        # Base conversions
+        rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB).astype(np.float32)
+        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV).astype(np.float32)
+        lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        ycrcb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+
+        # Split raw channels
+        R, G, B = [rgb[..., i] for i in range(3)]
+        H, S, V = [hsv[..., i] for i in range(3)]
+        L_lab, a_lab, b_lab = [lab[..., i] for i in range(3)]
+        Y, Cr, Cb = [ycrcb[..., 0], ycrcb[..., 1], ycrcb[..., 2]]
+
+        # Normalizations to [0,1] (OpenCV ranges: H[0..179], others [0..255], Lab L[0..100], a/b[0..255] with 128 center)
+        def norm01(x, lo, hi):
+            x = (x - lo) / (hi - lo + 1e-7)
+            return np.clip(x, 0.0, 1.0).astype(np.float32)
+
+        # RGB/HSV/YCrCb
+        Rn, Gn, Bn = norm01(R, 0, 255), norm01(G, 0, 255), norm01(B, 0, 255)
+        Hn, Sn, Vn = norm01(H, 0, 179), norm01(S, 0, 255), norm01(V, 0, 255)
+        Yn, Crn, Cbn = norm01(Y, 0, 255), norm01(Cr, 0, 255), norm01(Cb, 0, 255)
+
+        # Lab normalize (OpenCV Lab: L in [0,100], a/b shifted by +128 in [0,255])
+        Ln = norm01(L_lab, 0, 100)
+        an = norm01(a_lab, 0, 255)   # if you prefer centered: (a_lab-128)/127 → [-1,1] then map to [0,1]
+        bn = norm01(b_lab, 0, 255)
+
+        # Opponent & chromaticity
+        intensity = (R + G + B + 1e-7)
+        r_chroma = (R / intensity).astype(np.float32)  # already 0..1
+        g_chroma = (G / intensity).astype(np.float32)
+        # Opponent
+        O1 = (R - G)                    # emphasize red-green
+        O2 = ((R + G) * 0.5 - B)        # yellow-blue
+        O3 = (R + G + B) / 3.0          # intensity
+        # Normalize opponent roughly to [0,1] using image-local robust range
+        def robust01(x):
+            lo = np.percentile(x, 1.0)
+            hi = np.percentile(x, 99.0)
+            return norm01(np.clip(x, lo, hi), lo, hi)
+        O1n, O2n, O3n = robust01(O1), robust01(O2), norm01(O3, 0, 255)
+
+        # LCh from Lab
+        # Convert OpenCV a,b (0..255) back to signed approx: a* ~ a-128, b* ~ b-128
+        a_signed = (a_lab - 128.0).astype(np.float32)
+        b_signed = (b_lab - 128.0).astype(np.float32)
+        C = np.sqrt(a_signed**2 + b_signed**2)                  # chroma magnitude
+        h_rad = np.arctan2(b_signed, a_signed)                  # hue angle in radians [-pi, pi]
+        # Normalize C per-image (robust) and encode hue as sin/cos to avoid wrap
+        Cn = robust01(C)
+        sin_h = np.sin(h_rad).astype(np.float32)                # [-1,1]
+        cos_h = np.cos(h_rad).astype(np.float32)                # [-1,1]
+        # Map sin/cos to [0,1] for consistency
+        sin_h01 = (sin_h * 0.5 + 0.5).astype(np.float32)
+        cos_h01 = (cos_h * 0.5 + 0.5).astype(np.float32)
+
+        # Gradients / edges on luminance (use L* or Y)
+        L_for_edges = Ln
+        # Sobel derivatives (float32)
+        Gx = cv2.Sobel(L_for_edges, cv2.CV_32F, 1, 0, ksize=3)
+        Gy = cv2.Sobel(L_for_edges, cv2.CV_32F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(Gx * Gx + Gy * Gy)
+        grad_mag = grad_mag / (grad_mag.max() + 1e-7)
+
+        # Laplacian
+        lap = cv2.Laplacian(L_for_edges, cv2.CV_32F, ksize=3)
+        # Center to [0,1] using robust range
+        lapn = robust01(lap)
+
+        # Local stddev (3x3) as local contrast
+        k = 3
+        mu = cv2.blur(L_for_edges, (k, k))
+        mu2 = cv2.blur(L_for_edges * L_for_edges, (k, k))
+        local_var = np.maximum(mu2 - mu * mu, 0.0)
+        local_std = np.sqrt(local_var)
+        local_std = local_std / (local_std.max() + 1e-7)
+
+        # Build the feature dict (single-channel maps)
+        feats = {
+            # Raw color spaces
+            "R": Rn, "G": Gn, "B": Bn,
+            "H": Hn, "S": Sn, "V": Vn,
+            "Y": Yn, "Cr": Crn, "Cb": Cbn,
+
+            # Lab
+            "LAB_L": Ln, "LAB_a": an, "LAB_b": bn,
+
+            # LCh style
+            "LCh_C": Cn, "LCh_sinH": sin_h01, "LCh_cosH": cos_h01,
+
+            # Chromaticity & Opponent
+            "r_chroma": r_chroma, "g_chroma": g_chroma,
+            "Opp_O1": O1n, "Opp_O2": O2n, "Opp_O3": O3n,
+
+            # Edges / local stats
+            "GradMag": grad_mag, "Laplacian": lapn, "LocalStd": local_std,
+        }
+        return feats
+
     def compute_global_crop_box(self, folder_path, padding=1, bg_threshold=2):
         """
         Scan all images to determine the largest bounding box that includes all non-zero pixels.
@@ -84,9 +188,62 @@ class ImageDataProcessor:
         new_h, new_w = self.find_divisible_size(h, w)
         self.image_shape = (new_h // self.pool_size, new_w // self.pool_size)
         v_channel = v_channel[:new_h, :new_w]
-        pooled = v_channel.reshape(new_h // self.pool_size, self.pool_size, 
+        pooled = v_channel.reshape(new_h // self.pool_size, self.pool_size,
                                    new_w // self.pool_size, self.pool_size).mean(axis=(1, 3))
         return pooled
+
+    def _compute_adaptive_crop(self, image, base_crop_box):
+        """Re-center the stored crop box around the current foreground mask."""
+        if base_crop_box is None:
+            return None
+
+        height, width = image.shape[:2]
+        desired_height = min(base_crop_box["y_max"] - base_crop_box["y_min"], height)
+        desired_width = min(base_crop_box["x_max"] - base_crop_box["x_min"], width)
+        padding = base_crop_box.get("padding", 0)
+
+        mask = np.any(image > self.bg_threshold, axis=-1)
+        coords = np.argwhere(mask)
+
+        if coords.size == 0:
+            return base_crop_box
+
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+
+        y_min = max(y_min - padding, 0)
+        x_min = max(x_min - padding, 0)
+        y_max = min(y_max + padding, height)
+        x_max = min(x_max + padding, width)
+
+        center_y = (y_min + y_max) // 2
+        center_x = (x_min + x_max) // 2
+
+        def clamp(center, length, max_length):
+            start = int(round(center - length / 2))
+            end = start + length
+            if start < 0:
+                start = 0
+                end = min(length, max_length)
+            if end > max_length:
+                end = max_length
+                start = max(0, end - length)
+            # Ensure the slice has the requested size when possible
+            if end - start < length and max_length >= length:
+                start = max(0, min(start, max_length - length))
+                end = min(max_length, start + length)
+            return start, end
+
+        y_min, y_max = clamp(center_y, desired_height, height)
+        x_min, x_max = clamp(center_x, desired_width, width)
+
+        return {
+            "y_min": int(y_min),
+            "y_max": int(y_max),
+            "x_min": int(x_min),
+            "x_max": int(x_max),
+            "padding": int(padding)
+        }
 
     def process_image(self, image_path, crop_box=None):
         image = cv2.imread(image_path)
@@ -94,46 +251,42 @@ class ImageDataProcessor:
             if not self.quiet:
                 logger.warning(f"Error loading image: {image_path}")
             return None
-        if crop_box:
+        active_crop_box = crop_box
+        if crop_box and self.validation:
+            active_crop_box = self._compute_adaptive_crop(image, crop_box)
+
+        if active_crop_box:
             image = image[
-                crop_box["y_min"]:crop_box["y_max"],
-                crop_box["x_min"]:crop_box["x_max"]
+                active_crop_box["y_min"]:active_crop_box["y_max"],
+                active_crop_box["x_min"]:active_crop_box["x_max"]
             ]
 
+        feature_maps = self.compute_feature_maps(image)
 
-        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Decide which channels to use
+        if isinstance(self.channels, str) and self.channels.upper() == "ALL":
+            selected_keys = list(feature_maps.keys())
+        else:
+            selected_keys = [k for k in self.channels if k in feature_maps]
+            unknown = [k for k in self.channels if k not in feature_maps]
+            if unknown and not self.quiet:
+                logger.warning(f"Unknown channels requested (ignored): {unknown}")
 
-        channel_map = {
-            "H": hsv_image[:, :, 0],
-            "S": hsv_image[:, :, 1],
-            "V": hsv_image[:, :, 2],
-            "R": rgb_image[:, :, 0],
-            "G": rgb_image[:, :, 1],
-            "B": rgb_image[:, :, 2],
-        }
-
-        pooled_channels = []
-        for ch in self.channels:
-            if ch in channel_map:
-                pooled = self.apply_average_pooling(channel_map[ch])
-                # Normalize each channel properly
-                if ch == "H":
-                    pooled = pooled / 179.0  # H is in range [0,179]
-                else:
-                    pooled = pooled / 255.0  # S, V, R, G, B are in [0,255]
-                pooled_channels.append(pooled.reshape(-1, 1))
-            else:
-                if not self.quiet:
-                    logger.warning(f"Warning: Unknown channel '{ch}' requested.")
-
-        if not pooled_channels:
+        if not selected_keys:
             return None
 
-        combined = np.concatenate(pooled_channels, axis=1)
+        # Pool + stack
+        pooled_channels = []
+        for key in selected_keys:
+            pooled = self.apply_average_pooling(feature_maps[key])
+            pooled_channels.append(pooled.reshape(-1, 1))
+
+        combined = np.concatenate(pooled_channels, axis=1).astype(np.float32)
+
         if not self.quiet:
-            logger.info(f"Min/Max of normalized combined image: {combined.min()} - {combined.max()}")
-            
+            mn, mx = float(combined.min()), float(combined.max())
+            logger.info(f"Min/Max of normalized combined image ({len(selected_keys)} ch): {mn:.4f} - {mx:.4f}")
+
         return combined
 
     def process_images_in_folder(self, folder_path):

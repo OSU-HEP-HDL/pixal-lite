@@ -108,3 +108,10 @@ def load_and_merge_configs(config_dir):
             cfg = yaml.safe_load(f) or {}
             merged.update(cfg)
     return merged
+
+def deep_getattr(obj, attr_path, default=None):
+    for attr in attr_path.split("."):
+        obj = getattr(obj, attr, default)
+        if obj == default:
+            break
+    return obj

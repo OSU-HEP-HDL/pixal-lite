@@ -12,11 +12,20 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input, Dense, Flatten, Concatenate
 from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras import initializers
+
+
+import tensorflow as tf
+
+
+# Only after TF has initialized should you import Numba/onnxruntime (if you must).
+# from numba import cuda  # <-- avoid calling cuda.select_device(0) before TF
+# import onnxruntime as ort
 
 sys.stderr.close()
 sys.stderr = stderr_backup
 
-from pixal.modules.model_training import resolve_loss
+from pixal.modules.model_training import  make_weighted_loss,make_per_channel_metric, make_total_weighted_metric, make_weighted_contrib_metric
 import numpy as np
 import yaml
 import logging
@@ -105,8 +114,18 @@ class Autoencoder(tf.keras.Model):
         for i, units in enumerate(decoder_arch):
             self.decoder.add(Dense(units, activation=tf.nn.leaky_relu, activity_regularizer=regularizer,
                                 name=self.params['decoder_names'][i]))
-
-        self.output_layer = Dense(input_dim, activation=self.params['output_activation'], name="output")
+        
+        if self.params.get('bias_init_vector') is not None:
+            bias_init = initializers.Constant(self.params['bias_init_vector'])
+        else:
+            bias_init = None
+        
+        self.output_layer = Dense(input_dim, 
+                                activation=self.params['output_activation'], 
+                                name="output",
+                                bias_initializer=bias_init,
+                                kernel_regularizer=None,
+                                activity_regularizer=None)
 
 
     def get_config(self):
@@ -123,7 +142,7 @@ class Autoencoder(tf.keras.Model):
 
     def compile_and_train(self, x_train, y_train, x_val, y_val, params):
         # Early stopping and checkpointing
-        loss_fn = resolve_loss(params['loss_function'])
+
         early_stopping = EarlyStopping(
             monitor='val_loss',
             patience=params['patience'],
@@ -138,16 +157,35 @@ class Autoencoder(tf.keras.Model):
             save_freq='epoch'
         )
 
+        channels = params.get('channels', [])
+
+        if params['optimizer'] == 'adam':
+           optimizer = tf.keras.optimizers.Adam(learning_rate=float(params['learning_rate']))
+        elif params['optimizer'] == 'adamW':
+            optimizer = tf.keras.optimizers.AdamW(learning_rate=float(params['learning_rate']), weight_decay=float(params['weight_decay']))
+        else:
+            optimizer = tf.keras.optimizers.Adam(learning_rate=float(params['learning_rate']))
+        # Build metrics and loss function
+
+        metrics = ["mse"] + [make_per_channel_metric(i, channels, reducer="mse") for i in range(len(channels))]
+        metrics.append(make_total_weighted_metric(channels, params['weights'], base="huber", delta=1.0))
+        metrics += [make_weighted_contrib_metric(i, channels, params['weights'], base="huber", delta=0.5)
+            for i in range(len(channels))]
+        
+        loss_fn = make_weighted_loss(channels, weights=params['weights'], base=params['loss_function'], delta=params.get('huber_delta', 1.0),from_logits=params.get('logits',False) , use_mask=params.get('masked_loss', False))
+
         # Compile the model
         self.logger.info("Compiling the model...")
-        self.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=params['learning_rate']),
+        self.compile(optimizer=optimizer,
                     loss=loss_fn,
-                    metrics=['mse']) # Mean Squared Error (measures reconstruction quality)
+                    metrics=metrics,
+                    run_eagerly=True) 
         
         if params['use_gradient_tape']:
             self.logger.info("Training with gradient tape...")
-
             for epoch in range(params['epochs']):
+                epoch_loss = 0.0
+                epoch_steps = 0
                 for step, (x_batch, y_batch) in enumerate(zip(x_train, y_train)):  # Include labels
                     with tf.GradientTape() as tape:
                         predictions = self.call(x_batch, y_batch)  # Pass both image & label
@@ -155,8 +193,19 @@ class Autoencoder(tf.keras.Model):
                     gradients = tape.gradient(loss, self.trainable_variables)
                     self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
+                    epoch_loss += float(loss.numpy())
+                    epoch_steps += 1
+
                     if step % 10 == 0:
                         self.logger.info(f"Epoch {epoch + 1}, Step {step}, Loss: {loss.numpy():.4f}")
+
+                # end epoch: log average epoch loss to MLflow if available
+                try:
+                    from pixal.mlflow_utils import log_metrics
+                    avg_loss = epoch_loss / max(1, epoch_steps)
+                    log_metrics({"loss": float(avg_loss)}, step=epoch)
+                except Exception:
+                    pass
         else:
             if self.one_hot_encoding:
                 inputs_train = [x_train, y_train]
@@ -168,7 +217,17 @@ class Autoencoder(tf.keras.Model):
                 val_targets = x_val
             # Train the model with default fit method
             self.logger.info("Training the model with standard fit method...")
-            #Args: training data, target data, batch_size, epochs, verbose, callbacks, validation_data=[x_val, x_target], val_batch_size
+            # Prepare callbacks and add MLflow Keras callback when available
+            callbacks = [early_stopping, checkpoint]
+            try:
+                from pixal.mlflow_utils import KerasModelLoggerCallback
+                # Only append if the callback is a real TF callback
+                if KerasModelLoggerCallback is not None:
+                    callbacks.append(KerasModelLoggerCallback())
+            except Exception:
+                pass
+
+            # Args: training data, target data, batch_size, epochs, verbose, callbacks, validation_data=[x_val, x_target], val_batch_size
             # Train the model using (x_train, y_train) as input
             history = self.fit(
                 inputs_train,  # Input: (image data + labels)
@@ -176,7 +235,7 @@ class Autoencoder(tf.keras.Model):
                 batch_size=params['batchsize'],
                 epochs=params['epochs'],
                 verbose=1,
-                callbacks=[early_stopping, checkpoint],
+                callbacks=callbacks,
                 validation_data=(inputs_val, val_targets),
                 validation_batch_size=params['batchsize']
         ) 
@@ -225,22 +284,78 @@ class Autoencoder(tf.keras.Model):
             return self.predict(new_data)
     
     def save_model(self, save_path):
-        """Save the model to the specified path."""
-        self.logger.info(f"Saving model weights to {save_path}...")
-        self.save_weights(save_path)
-        self.logger.info(f"Model weights saved to {save_path}")
+        """Save the model.
+
+        The training scripts pass a `save_path` derived from the configured
+        `model_name` and `model_file_extension`. To be robust we attempt to
+        save the full Keras model (recommended) and also write weights to a
+        backup `<model_name>.weights.h5` for backward compatibility.
+        """
+        try:
+            # Attempt to save the full model (SavedModel or single-file format)
+            self.logger.info(f"Saving full Keras model to {save_path}...")
+            # tf.keras.Model.save will create a directory for SavedModel or a file for .h5
+            self.save(save_path)
+            self.logger.info(f"Full model saved to {save_path}")
+        except Exception as e:
+            self.logger.warning(f"Full model save failed ({e}), falling back to weights-only save.")
+
+        # Always save weights as a backup (HDF5)
+        weights_path = os.path.splitext(str(save_path))[0] + ".weights.h5"
+        try:
+            self.logger.info(f"Saving model weights to {weights_path}...")
+            self.save_weights(weights_path)
+            self.logger.info(f"Model weights saved to {weights_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to save weights to {weights_path}: {e}")
       
     @classmethod
     def load_model(cls, load_path, params):
+        """Load a model with preference order:
+
+        1. If `load_path` points to a saved full model (SavedModel dir or HDF5), use `tf.keras.models.load_model`.
+        2. Otherwise, rebuild the model architecture and call `load_weights` from a weights file.
+
+        The `params` dict is used to reconstruct the model when needed.
+        """
+        # First try to load a full model
+        try:
+            loaded = tf.keras.models.load_model(load_path)
+            # If successful, ensure the returned object is an Autoencoder instance
+            if isinstance(loaded, cls):
+                return loaded
+            else:
+                # Wrap weights into our Autoencoder class: create and load weights from the loaded model
+                model = cls(params)
+                model.build_model(input_dim=params["input_dim"])
+                # try to load weights from the loaded model if possible
+                try:
+                    model.set_weights(loaded.get_weights())
+                    return model
+                except Exception:
+                    # fallthrough to weights file strategy
+                    pass
+        except Exception:
+            # Not a full-model file or load failed; continue to weights fallback
+            pass
+
+        # Fallback: rebuild architecture and load weights
         model = cls(params)
         model.build_model(input_dim=params["input_dim"])
 
         dummy_input = tf.zeros((1, params["input_dim"]))
         if params.get("one_hot_encoding", False):
             dummy_labels = tf.zeros((1, params["label_latent_size"]))
+            # run a forward pass to build layers
             model([dummy_input, dummy_labels])
         else:
             model(dummy_input)
-            
-        model.load_weights(load_path)
-        return model
+
+        # If provided load_path points to a weights file use it, otherwise try a derived .weights.h5
+        try:
+            model.load_weights(load_path)
+            return model
+        except Exception:
+            weights_path = os.path.splitext(str(load_path))[0] + ".weights.h5"
+            model.load_weights(weights_path)
+            return model
