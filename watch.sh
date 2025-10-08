@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Defaults (can be overridden via -e ...)
+# --- Config (env-overridable) ---
 WATCH_DIR="${WATCH_DIR:-/mount/machine_learning/validation}"
 MODEL_DIR="${MODEL_DIR:-/mount/machine_learning/models}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/mount/machine_learning/results}"
@@ -11,25 +11,26 @@ SENTINEL_NAME="${SENTINEL_NAME:-.validated}"
 RERUN_ON_CHANGE="${RERUN_ON_CHANGE:-false}"
 READY_TIMEOUT="${READY_TIMEOUT:-60}"
 READY_POLL_INTERVAL="${READY_POLL_INTERVAL:-0.5}"
+POLL_INTERVAL="${POLL_INTERVAL:-5}"   # used in polling mode
+FORCE_DEFAULT_CMD_TEMPLATE="${FORCE_DEFAULT_CMD_TEMPLATE:-false}"
+
+export MODEL_DIR
+WATCH_DIR="${WATCH_DIR%/}"
+OUTPUT_ROOT="${OUTPUT_ROOT%/}"
 
 DEFAULT_TEMPLATE='pixal validate -i "{component}" -o "{output}"'
-export MODEL_DIR
-# If you want to *force* the default and ignore any external env (recommended while debugging):
-unset CMD_TEMPLATE
-CMD_TEMPLATE="$DEFAULT_TEMPLATE"
-echo "Command template: $CMD_TEMPLATE"
-
-command -v inotifywait >/dev/null 2>&1 || { echo "inotifywait not found"; exit 1; }
+if [[ "$FORCE_DEFAULT_CMD_TEMPLATE" == "true" ]]; then
+  CMD_TEMPLATE="$DEFAULT_TEMPLATE"
+fi
 
 echo "Watching: $WATCH_DIR"
 echo "Extensions: $PATTERN"
 echo "Rerun on change: $RERUN_ON_CHANGE"
 echo "Command template: $CMD_TEMPLATE"
 
-ext_regex="$(echo "$PATTERN" | tr ',' '|' )"
-EVENTS="close_write,moved_to"
-
-mkdir -p "$WATCH_DIR"
+# Build helpers for extension matching
+ext_regex_lower="$(echo "$PATTERN" | tr 'A-Z,' 'a-z|' )"
+ext_regex_emacs="$(echo "$PATTERN" | sed 's/,/\\|/g')"   # for find -iregex (Emacs syntax)
 
 has_image_in_dir() {
   local d="$1"
@@ -43,7 +44,6 @@ has_image_in_dir() {
   return 1
 }
 
-# serial_dir readiness: all immediate subdirs (or REQUIRED_DIRS) contain ≥1 image
 component_ready() {
   local serial_dir="$1"
 
@@ -57,51 +57,39 @@ component_ready() {
     return 0
   fi
 
-  local found_subdirs=0
-  local d
+  local found_subdirs=0 d
   while IFS= read -r -d '' d; do
-    case "$(basename "$d")" in
-      .*|meta|logs|output|results) continue ;;
-    esac
+    case "$(basename "$d")" in .*|meta|logs|output|results) continue ;; esac
     found_subdirs=1
     has_image_in_dir "$d" || return 1
   done < <(find "$serial_dir" -mindepth 1 -maxdepth 1 -type d -print0)
 
-  [[ "$found_subdirs" -ge 1 ]] || return 1
-  return 0
+  [[ "$found_subdirs" -ge 1 ]]
 }
 
-# Poll for readiness with timeout
 wait_until_ready() {
-  local serial_dir="$1"
-  local start now
+  local serial_dir="$1" start now
   start=$(date +%s)
   while true; do
-    if component_ready "$serial_dir"; then
-      return 0
-    fi
+    if component_ready "$serial_dir"; then return 0; fi
     now=$(date +%s)
-    if (( now - start >= READY_TIMEOUT )); then
-      return 1
-    fi
+    (( now - start >= READY_TIMEOUT )) && return 1
     sleep "$READY_POLL_INTERVAL"
   done
 }
 
-# Map a file to its <serial> directory: .../<component>/<serial>/<subdir>/<file>
 get_serial_dir() {
   local file_path="$1"
   local subdir; subdir="$(dirname "$file_path")"   # .../<component>/<serial>/<subdir>
   dirname "$subdir"                                # .../<component>/<serial>
 }
 
-# Validate a single <serial> directory
 run_validate_once() {
   local serial_dir="$1"
   local component_name; component_name="$(basename "$(dirname "$serial_dir")")"
   local serial_name;    serial_name="$(basename "$serial_dir")"
 
-  local output="${OUTPUT_ROOT%/}/${component_name}/${serial_name}"
+  local output="${OUTPUT_ROOT}/${component_name}/${serial_name}"
   mkdir -p "$output"
 
   local lockdir="$serial_dir/.validating.lock"
@@ -115,51 +103,34 @@ run_validate_once() {
   if mkdir "$lockdir" 2>/dev/null; then
     trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT
 
-    # Default template we consider “safe”
-    local default_tmpl='pixal validate -i "{component}" -o "{output}"'
-
-    # If template is exactly the default (most cases), run without eval
-    if [[ "${CMD_TEMPLATE}" == "${default_tmpl}" || -z "${CMD_TEMPLATE}" ]]; then
+    if [[ "$CMD_TEMPLATE" == "$DEFAULT_TEMPLATE" || -z "$CMD_TEMPLATE" ]]; then
       echo "[Watcher] Validating:"
       echo "  Component: $component_name"
       echo "  Serial:    $serial_name"
       echo "  Output:    $output"
       echo "  Command:   pixal validate -i \"$serial_dir\" -o \"$output\""
       if pixal validate -i "$serial_dir" -o "$output"; then
-        : > "$sentinel"
-        echo "[Watcher] Done: $serial_dir"
+        : > "$sentinel"; echo "[Watcher] Done: $serial_dir"
       else
         echo "[Watcher] Command failed for: $serial_dir"
       fi
-      rmdir "$lockdir" 2>/dev/null || true
-      trap - EXIT
-      return
-    fi
-
-    # For *custom* templates, do a quick sanity check then eval
-    local cmd="${CMD_TEMPLATE//\{component\}/$serial_dir}"
-    cmd="${cmd//\{output\}/$output}"
-
-    # Sanity: require an even number of double quotes
-    if (( $(printf '%s' "$cmd" | tr -cd '"' | wc -c) % 2 )); then
-      echo "[Watcher] ERROR: Unbalanced quotes in CMD_TEMPLATE after substitution:"
-      echo "  $cmd"
-      rmdir "$lockdir" 2>/dev/null || true
-      trap - EXIT
-      return 1
-    fi
-
-    echo "[Watcher] Validating:"
-    echo "  Component: $component_name"
-    echo "  Serial:    $serial_name"
-    echo "  Output:    $output"
-    echo "  Command:   $cmd"
-
-    if eval -- "$cmd"; then
-      : > "$sentinel"
-      echo "[Watcher] Done: $serial_dir"
     else
-      echo "[Watcher] Command failed for: $serial_dir"
+      local cmd="${CMD_TEMPLATE//\{component\}/$serial_dir}"
+      cmd="${cmd//\{output\}/$output}"
+      if (( $(printf '%s' "$cmd" | tr -cd '"' | wc -c) % 2 )); then
+        echo "[Watcher] ERROR: Unbalanced quotes in CMD_TEMPLATE after substitution:"; echo "  $cmd"
+      else
+        echo "[Watcher] Validating:"
+        echo "  Component: $component_name"
+        echo "  Serial:    $serial_name"
+        echo "  Output:    $output"
+        echo "  Command:   $cmd"
+        if eval -- "$cmd"; then
+          : > "$sentinel"; echo "[Watcher] Done: $serial_dir"
+        else
+          echo "[Watcher] Command failed for: $serial_dir"
+        fi
+      fi
     fi
 
     rmdir "$lockdir" 2>/dev/null || true
@@ -169,19 +140,78 @@ run_validate_once() {
   fi
 }
 
-# Main loop: watch only the validation root
-inotifywait -m --recursive --format '%e|%w|%f' -e "$EVENTS" "$WATCH_DIR" | \
-while IFS='|' read -r event dir file; do
-  if [[ "${file,,}" =~ \.(${ext_regex,,})$ ]]; then
-    path="${dir}${file}"
-    if [[ -s "$path" ]]; then
-      serial_dir="$(get_serial_dir "$path")"
-      sleep 0.1
+do_watch_inotify() {
+  echo "[Watcher] Mode: inotify"
+  command -v inotifywait >/dev/null 2>&1 || { echo "inotifywait not found"; return 1; }
+  local EVENTS="close_write,moved_to"
+  mkdir -p "$WATCH_DIR"
+  inotifywait -m --recursive --format '%e|%w|%f' -e "$EVENTS" "$WATCH_DIR" | \
+  while IFS='|' read -r event dir file; do
+    if [[ "${file,,}" =~ \.(${ext_regex_lower})$ ]]; then
+      local path="${dir}${file}"
+      if [[ -s "$path" ]]; then
+        local serial_dir; serial_dir="$(get_serial_dir "$path")"
+        sleep 0.1
+        if wait_until_ready "$serial_dir"; then
+          run_validate_once "$serial_dir"
+        else
+          echo "[Watcher] Timed out waiting for readiness: $serial_dir"
+        fi
+      fi
+    fi
+  done
+}
+
+do_watch_polling() {
+  echo "[Watcher] Mode: polling (NFS/SMB or no inotify)"
+  mkdir -p "$WATCH_DIR"
+  local STATE="/tmp/pixal_poll_state.tsv"
+  touch "$STATE"
+  while :; do
+    # Find newest timestamp per serial_dir that has matching files
+    declare -A newest=()
+    while IFS= read -r line; do
+      # line format: "<epoch> <dir_of_file>"
+      local ts dir
+      ts="${line%% *}"; dir="${line#* }"
+      [[ -n "$dir" ]] || continue
+      # map file dir -> serial_dir
+      local serial_dir; serial_dir="$(dirname "$dir")"
+      if [[ -z "${newest[$serial_dir]:-}" || "${ts%%.*}" -gt "${newest[$serial_dir]}" ]]; then
+        newest[$serial_dir]="${ts%%.*}"
+      fi
+    done < <(find "$WATCH_DIR" -type f -iregex ".*\\.\\(${ext_regex_emacs}\\)$" -printf '%T@ %h\n' 2>/dev/null | sort -n)
+
+    for serial_dir in "${!newest[@]}"; do
+      [[ -d "$serial_dir" ]] || continue
+      last=$(awk -F'\t' -v k="$serial_dir" '$1==k{print $2}' "$STATE" 2>/dev/null || true)
+      if [[ "$RERUN_ON_CHANGE" != "true" && -n "$last" && "${newest[$serial_dir]}" -le "$last" ]]; then
+        continue
+      fi
       if wait_until_ready "$serial_dir"; then
         run_validate_once "$serial_dir"
+        # update state
+        tmp="${STATE}.tmp"; grep -v -F "$serial_dir"$'\t' "$STATE" 2>/dev/null >"$tmp" || true
+        printf '%s\t%s\n' "$serial_dir" "${newest[$serial_dir]}" >>"$tmp"
+        mv "$tmp" "$STATE"
       else
         echo "[Watcher] Timed out waiting for readiness: $serial_dir"
       fi
-    fi
+    done
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+# --- Choose mode based on FS type & availability ---
+mkdir -p "$WATCH_DIR"
+fs_type="$(stat -f -c %T "$WATCH_DIR" 2>/dev/null || echo unknown)"
+if [[ "$fs_type" == "nfs" || "$fs_type" == "nfs4" || "$fs_type" == "cifs" || "$fs_type" == "smbfs" ]]; then
+  do_watch_polling
+else
+  if do_watch_inotify; then
+    exit 0
+  else
+    do_watch_polling
   fi
-done
+fi
+
