@@ -3,7 +3,7 @@ import os
 import logging
 from types import SimpleNamespace
 from pathlib import Path
-import Iterable
+from collections.abc import Iterable
 
 def resolve_path(obj):
     parts = []
