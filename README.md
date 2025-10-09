@@ -47,4 +47,4 @@ docker run --rm \
   pixal-lite validate -m /model -i /R0_DATA_FLEX_F1/20UPIPG9000023/VISUAL_INSPECTION 
 ```
 
-Everything subject to change
+Everything subject to change.
