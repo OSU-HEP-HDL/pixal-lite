@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from pixal.preprocessing import remove_background, align_images, imagePreprocessor
-from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace,extract_component_name
+from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace,extract_component_name, list_type_dirs
 import subprocess
 import sys
 import os
@@ -34,29 +34,25 @@ def run_validation(input_dir, output_dir, quiet=False):
     component_path = Path(component_path) / component_model
     logger.info(f"Component path: {component_path}")
 
-    # Step 1: Check if component_path has subdirs other than "metadata"
-    subdirs = [d for d in component_path.iterdir() if d.is_dir() and d.name != "metadata"]
-
-    # Step 2: If such a subdir exists, use it to build parameter_path
+    # Step 1: choose a real type folder under component_path
+    subdirs = list_type_dirs(component_path)
     if subdirs:
-        type_folder = subdirs[0]   
+        type_folder = subdirs[0]   # first valid one
+    else:
+        type_folder = None  # or handle “no types found” case
 
     model_config = load_config(component_path / type_folder / "metadata" / "model_training.yaml").get("model_training", {})
     logger.info(f"Model configuration loaded: {model_config}")
+
     input_dir = Path(input_dir)
-    
+
     if model_config.one_hot_encoding:
         print("One hot encoding model detected")
-
     else:
-        # Loop over each type folder (image categories)
-        for type_folder in input_dir.iterdir():
-            
-            if not type_folder.is_dir():
-                continue 
-
+        # Loop over each type folder (image categories) in input_dir
+        for type_folder in list_type_dirs(input_dir):
             logger.info(f"🔍 Running validation for {type_folder.name}")
-            
+
             base_model_path = component_path / type_folder.name
             base_input_path = Path(input_path) / type_folder.name
             base_output_path = Path(output_dir) / component_model / type_folder.name
@@ -66,13 +62,13 @@ def run_validation(input_dir, output_dir, quiet=False):
             output_preprocess.mkdir(parents=True, exist_ok=True)
             output_validate = base_output_path / "validation"
             output_validate.mkdir(parents=True, exist_ok=True)
-            
+
             logger.info(f"Base Model path: {base_model_path}")
             logger.info(f"Base output path: {base_output_path}")
             logger.info(f"Output preprocess path: {output_preprocess}")
             logger.info(f"Output validate path: {output_validate}")
 
-            config_path = base_model_path / "metadata" #resolve_parent_inserted_path(path_config.metadata_path, type_folder.name,1)
+            config_path = base_model_path / "metadata"
             logger.info(f"Config path: {config_path}")
             config = load_and_merge_configs(config_path)
             config = _dict_to_namespace(config)

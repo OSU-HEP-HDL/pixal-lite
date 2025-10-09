@@ -3,6 +3,7 @@ import os
 import logging
 from types import SimpleNamespace
 from pathlib import Path
+import Iterable
 
 def resolve_path(obj):
     parts = []
@@ -143,3 +144,19 @@ def extract_component_name(path: str) -> str | None:
         if part in valid_names:
             return part
     return None
+
+
+IGNORED_DIR_NAMES = {"metadata"}
+def is_ignored_dir(p: Path) -> bool:
+    name = p.name
+    return (
+        not p.is_dir()
+        or name in IGNORED_DIR_NAMES
+        or name.startswith(".")             # hidden dirs like .validating.lock
+        or name.endswith(".lock")           # any foo.lock
+        or name.endswith("_lock")           # defensive, in case of alt style
+    )
+
+def list_type_dirs(base: Path) -> Iterable[Path]:
+    # Deterministic order is nice for logs & reproducibility
+    return sorted([d for d in base.iterdir() if not is_ignored_dir(d)], key=lambda p: p.name)
