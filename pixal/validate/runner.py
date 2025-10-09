@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from pixal.preprocessing import remove_background, align_images, imagePreprocessor
-from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace
+from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace,extract_component_name
 import subprocess
 import sys
 import os
@@ -23,7 +23,7 @@ def run_validation(input_dir, output_dir, quiet=False):
     logger = logging.getLogger("pixal")
     logger.info(f"Logging all preprocessing and validation steps to {log_path / f'{timestamp}.log'}")
     input_path = Path(input_dir)
-    component_model = input_path.parts[4]
+    component_model = extract_component_name(input_path)
     logger.info(f"Input directory: {input_dir}")
     logger.info(f"Component model identified as: {component_model}")
     logger.info(f"Output directory: {output_dir}")

@@ -115,3 +115,31 @@ def deep_getattr(obj, attr_path, default=None):
         if obj == default:
             break
     return obj
+
+from pathlib import Path
+
+def extract_component_name(path: str) -> str | None:
+    """
+    Extracts the first matching subdirectory name from a given path.
+    Returns None if no known component is found.
+    """
+    valid_names = {
+        "COUPLED_RING_R01", "INTERMEDIATE_RING",
+        "L0_BARREL_DATA_FLEX_F1", "L0_BARREL_DATA_FLEX_F2",
+        "L0_BARREL_DATA_FLEX_F3", "L0_BARREL_DATA_FLEX_F4",
+        "L0_BARREL_POWER_FLEX_F1", "L0_BARREL_POWER_FLEX_F2",
+        "L1_BARREL_DATA_FLEX", "L1_BARREL_POWER_FLEX",
+        "QUAD_MODULE_Z_RAY_FLEX", "QUAD_RING_R1",
+        "R0_DATA_FLEX_F1", "R0_DATA_FLEX_F2", "R0_DATA_FLEX_F3",
+        "R0_POWER_T_F1", "R0_POWER_JUMPER_F2",
+        "R05_DATA_FLEX_F1", "R05_DATA_FLEX_F2",
+        "R0_Triplet_Data_F1",
+        "TYPE0_TO_PP0_F1", "TYPE0_TO_PP0_F2"
+    }
+
+    # Normalize and split path into parts
+    path_parts = Path(path).parts
+    for part in path_parts:
+        if part in valid_names:
+            return part
+    return None
