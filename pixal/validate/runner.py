@@ -30,6 +30,11 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
 
     #path_config = load_config("configs/paths.yaml")
 
+     # Preserve the original argument so we never clobber it
+    model_dir_arg = Path(model_dir) if model_dir else None
+    use_user_model_dir = model_dir_arg is not None
+
+
     if model_dir:   
         logger.info(f"Using user-specified model directory: {model_dir}")
         component_path = Path(model_dir) / component_model
@@ -57,21 +62,24 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
         model_config = load_config(component_path / type_folder / "metadata" / "model_training.yaml").get("model_training", {})
     logger.info(f"Model configuration loaded: {model_config}")
 
+    input_path = Path(input_dir)
     input_dir = Path(input_dir)
 
     if model_config.one_hot_encoding:
         print("One hot encoding model detected")
     else:
-        # Loop over each type folder (image categories) in input_dir
         for type_folder in list_type_dirs(input_dir):
             logger.info(f"🔍 Running validation for {type_folder.name}")
 
-            if model_dir:
-                base_model_path = Path(model_dir) / component_model / type_folder.name
+            # ✅ Build base_model_path from the preserved arg, never from the mutable `model_dir` name
+            if use_user_model_dir:
+                base_model_path = model_dir_arg / component_model / type_folder.name
                 logger.info(f"Using user-specified model path: {base_model_path}")
             else:
                 base_model_path = component_path / type_folder.name
-            base_input_path = Path(input_path) / type_folder.name
+                logger.info(f"Using default model path: {base_model_path}")
+
+            base_input_path = input_path / type_folder.name
             base_output_path = Path(output_dir) / component_model / type_folder.name
             base_output_path.mkdir(parents=True, exist_ok=True)
 
@@ -85,52 +93,48 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
             logger.info(f"Output preprocess path: {output_preprocess}")
             logger.info(f"Output validate path: {output_validate}")
 
+            # ✅ Per-type config lives under this type’s metadata
             config_path = base_model_path / "metadata"
             logger.info(f"Config path: {config_path}")
             config = load_and_merge_configs(config_path)
             config = _dict_to_namespace(config)
             path_config = load_config(config_path / "paths.yaml")
-            reference_dir = base_model_path / resolve_path(config.general_aligned_images_path)
-            logger.info(f"Reference dir: {reference_dir}")
-            
-            
 
-            #model_dir = resolve_path(path_config.component_model_path) / type_folder.name / resolve_path(path_config.model_path.model) 
-            model_dir = base_model_path / "model"
-            logger.info(f"Model dir: {model_dir}")
-            
-            # Dynamically resolve per-type paths
+            # Paths derived from the per-type base
+            aligned_rel = resolve_path(config.general_aligned_images_path)
+            reference_dir = (base_model_path / aligned_rel)
+            logger.info(f"Reference dir: {reference_dir}")
+
+            # ✅ Use a distinct name so we don’t shadow the function arg
+            model_path = base_model_path / "model"
+            logger.info(f"Model dir: {model_path}")
+
             bg_removed_dir = output_preprocess / resolve_path(config.general_remove_background_path)
             logger.info(f"Background removed dir: {bg_removed_dir}")
-            aligned_dir = base_model_path / resolve_path(config.general_aligned_images_path)
-            logger.info(f"Aligned dir: {aligned_dir}")
-            reference_dir = resolve_path(reference_dir)  # assume same reference
-            #output_dir =  Path(output_dir) / "figures" #base_path / resolve_path(path_config.general_aligned_metrics_path)
-            npz_dir = base_output_path 
-            logger.info(f"NPZ dir: {npz_dir}")
 
-            #for d in [bg_removed_dir, aligned_dir, output_dir, npz_dir]:
-            #    d.mkdir(parents=True, exist_ok=True)
+            aligned_dir = base_model_path / aligned_rel
+            logger.info(f"Aligned dir: {aligned_dir}")
+
+            npz_dir = base_output_path
+            logger.info(f"NPZ dir: {npz_dir}")
 
             preprocess_input = bg_removed_dir
             logger.info(f"Preprocess input dir: {preprocess_input}")
-            logger.info(f"Starting preprocessing steps for {type_folder.name}...")
-            logger.info(f"Running background removal step for {base_input_path}")
+
+            # --- preprocessing ---
             remove_background.run(base_input_path, bg_removed_dir, config=config, quiet=quiet)
             if config.preprocessing.alignment.apply_alignment:
-                logger.info(f"Running alignment step for {type_folder.name}...")
-                align_images.run(bg_removed_dir, aligned_dir, reference_dir, output_dir, config=config, quiet=quiet, detect=True)
+                align_images.run(bg_removed_dir, aligned_dir, reference_dir, output_dir,
+                                 config=config, quiet=quiet, detect=True)
                 preprocess_input = aligned_dir
-            logger.info(f"Running image preprocessing step for {type_folder.name}...")
-            imagePreprocessor.run(preprocess_input, npz_dir, config=config, quiet=quiet,validation=True)
+            imagePreprocessor.run(preprocess_input, npz_dir, config=config, quiet=quiet, validation=True)
 
-            logger.info(f"Preprocessing complete for {type_folder.name}.")
-            logger.info(f"Starting validation step for {type_folder.name}...")
+            # --- validation ---
             args = [
                 sys.executable,
                 "pixal/validate/validate_one_model.py",
                 "--npz", str(npz_dir),
-                "--model", str(model_dir),
+                "--model", str(model_path),      # ✅ use model_path, not model_dir
                 "--metrics", str(output_validate),
                 "--config", str(config_path),
                 "--preprocess"
