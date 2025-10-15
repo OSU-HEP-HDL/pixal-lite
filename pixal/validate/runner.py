@@ -25,23 +25,36 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
     input_path = Path(input_dir)
     component_model = extract_component_name(input_path)
     logger.info(f"Input directory: {input_dir}")
-    logger.info(f"Component model identified as: {component_model}")
+    
     logger.info(f"Output directory: {output_dir}")
 
     #path_config = load_config("configs/paths.yaml")
 
-    component_path = os.environ.get("MODEL_DIR", "/mount/machine_learning/models")
-    component_path = Path(component_path) / component_model
+    if model_dir:   
+        logger.info(f"Using user-specified model directory: {model_dir}")
+        component_path = Path(model_dir) / component_model
+        logger.info(f"Component model identified as: {component_model}")
+    else:
+        
+        logger.info("No model directory specified, using default MODEL_DIR environment variable or fallback path.")
+        component_path = os.environ.get("MODEL_DIR", "/mount/machine_learning/models")
+        component_path = Path(component_path) / component_model
     logger.info(f"Component path: {component_path}")
 
     # Step 1: choose a real type folder under component_path
     subdirs = list_type_dirs(component_path)
     if subdirs:
         type_folder = subdirs[0]   # first valid one
+        logger.info(f"type folders found: {type_folder}")
+        logger.info(f"Type folder identified as: {type_folder.name}")
     else:
         type_folder = None  # or handle “no types found” case
 
-    model_config = load_config(component_path / type_folder / "metadata" / "model_training.yaml").get("model_training", {})
+    if model_dir:
+        logger.info(f"Loading model configuration from: {type_folder / 'metadata' / 'model_training.yaml'}")
+        model_config = load_config(type_folder / "metadata" / "model_training.yaml").get("model_training", {})
+    else:
+        model_config = load_config(component_path / type_folder / "metadata" / "model_training.yaml").get("model_training", {})
     logger.info(f"Model configuration loaded: {model_config}")
 
     input_dir = Path(input_dir)
@@ -54,7 +67,8 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
             logger.info(f"🔍 Running validation for {type_folder.name}")
 
             if model_dir:
-                base_model_path = Path(model_dir) / type_folder.name
+                base_model_path = Path(model_dir) / component_model / type_folder.name
+                logger.info(f"Using user-specified model path: {base_model_path}")
             else:
                 base_model_path = component_path / type_folder.name
             base_input_path = Path(input_path) / type_folder.name
