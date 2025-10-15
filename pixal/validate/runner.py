@@ -7,7 +7,7 @@ import sys
 import os
 from datetime import datetime
 
-def run_validation(input_dir, output_dir, quiet=False):
+def run_validation(input_dir, output_dir, model_dir, quiet=False):
     # Get component paths to retrieve model + metadata
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = Path("./logs")
@@ -53,7 +53,10 @@ def run_validation(input_dir, output_dir, quiet=False):
         for type_folder in list_type_dirs(input_dir):
             logger.info(f"🔍 Running validation for {type_folder.name}")
 
-            base_model_path = component_path / type_folder.name
+            if model_dir:
+                base_model_path = Path(model_dir) / type_folder.name
+            else:
+                base_model_path = component_path / type_folder.name
             base_input_path = Path(input_path) / type_folder.name
             base_output_path = Path(output_dir) / component_model / type_folder.name
             base_output_path.mkdir(parents=True, exist_ok=True)
