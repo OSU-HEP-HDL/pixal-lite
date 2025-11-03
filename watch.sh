@@ -13,6 +13,7 @@ READY_TIMEOUT="${READY_TIMEOUT:-60}"
 READY_POLL_INTERVAL="${READY_POLL_INTERVAL:-0.5}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"   # used in polling mode
 FORCE_DEFAULT_CMD_TEMPLATE="${FORCE_DEFAULT_CMD_TEMPLATE:-false}"
+DONE_FILE_NAME="${DONE_FILE_NAME:-done.txt}"     # <--- NEW
 
 export MODEL_DIR
 WATCH_DIR="${WATCH_DIR%/}"
@@ -27,10 +28,46 @@ echo "Watching: $WATCH_DIR"
 echo "Extensions: $PATTERN"
 echo "Rerun on change: $RERUN_ON_CHANGE"
 echo "Command template: $CMD_TEMPLATE"
+echo "Done trigger file: $DONE_FILE_NAME"  # <--- NEW
 
 # Build helpers for extension matching
 ext_regex_lower="$(echo "$PATTERN" | tr 'A-Z,' 'a-z|' )"
 ext_regex_emacs="$(echo "$PATTERN" | sed 's/,/\\|/g')"   # for find -iregex (Emacs syntax)
+
+# --- NEW: purge helper: safely wipe contents of WATCH_DIR when done.txt is created ---
+purge_watch_dir() {
+  local wd="$WATCH_DIR"
+  local df="$wd/$DONE_FILE_NAME"
+
+  # Safety checks
+  [[ -d "$wd" ]] || { echo "[Watcher] Purge skipped: WATCH_DIR does not exist."; return 0; }
+  # Require the done file to be present at top level before purging
+  [[ -f "$df" ]] || { echo "[Watcher] Purge skipped: done file not present."; return 0; }
+
+  # Extra safety: never allow purging '/' or empty path
+  if [[ -z "$wd" || "$wd" == "/" ]]; then
+    echo "[Watcher] Refusing to purge: WATCH_DIR resolves to '$wd'"
+    return 1
+  fi
+
+  echo "[Watcher] 'done' trigger detected — purging contents of: $wd"
+
+  # Remove everything inside WATCH_DIR, including hidden files/dirs, but not '.' or '..'
+  shopt -s nullglob dotglob
+  for entry in "$wd"/*; do
+    # Skip the done file itself; remove it last to avoid re-triggering while purging
+    if [[ "$(basename "$entry")" == "$DONE_FILE_NAME" ]]; then
+      continue
+    fi
+    rm -rf --one-file-system -- "$entry"
+  done
+  shopt -u dotglob
+
+  # Finally remove the done file
+  rm -f -- "$df"
+
+  echo "[Watcher] Watch directory emptied."
+}
 
 has_image_in_dir() {
   local d="$1"
@@ -147,6 +184,13 @@ do_watch_inotify() {
   mkdir -p "$WATCH_DIR"
   inotifywait -m --recursive --format '%e|%w|%f' -e "$EVENTS" "$WATCH_DIR" | \
   while IFS='|' read -r event dir file; do
+    # --- NEW: react to top-level done.txt creation ---
+    if [[ "$dir" == "$WATCH_DIR/" && "$file" == "$DONE_FILE_NAME" ]]; then
+      purge_watch_dir
+      continue
+    fi
+    # -------------------------------------------------
+
     if [[ "${file,,}" =~ \.(${ext_regex_lower})$ ]]; then
       local path="${dir}${file}"
       if [[ -s "$path" ]]; then
@@ -168,6 +212,12 @@ do_watch_polling() {
   local STATE="/tmp/pixal_poll_state.tsv"
   touch "$STATE"
   while :; do
+    # --- NEW: polling check for done.txt trigger ---
+    if [[ -f "$WATCH_DIR/$DONE_FILE_NAME" ]]; then
+      purge_watch_dir
+    fi
+    # ----------------------------------------------
+
     # Find newest timestamp per serial_dir that has matching files
     declare -A newest=()
     while IFS= read -r line; do
@@ -214,4 +264,3 @@ else
     do_watch_polling
   fi
 fi
-

@@ -160,3 +160,21 @@ def is_ignored_dir(p: Path) -> bool:
 def list_type_dirs(base: Path) -> Iterable[Path]:
     # Deterministic order is nice for logs & reproducibility
     return sorted([d for d in base.iterdir() if not is_ignored_dir(d)], key=lambda p: p.name)
+
+
+def create_done_file(directory: str):
+    """
+    Creates a text file named 'done.txt' in the specified directory
+    and writes the text 'Fin' inside it.
+    """
+    # Ensure the directory exists
+    os.makedirs(directory, exist_ok=True)
+    
+    # Define the file path
+    file_path = os.path.join(directory, "done.txt")
+    
+    # Write the text into the file
+    with open(file_path, "w") as f:
+        f.write("Fin")
+    
+    print(f"'done.txt' created at: {file_path}")
