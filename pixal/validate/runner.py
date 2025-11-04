@@ -144,7 +144,9 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
 
             subprocess.run(args)
 
-            create_done_file(input_path)
+            validation_root = input_path.split("/validation/")[0] + "/validation/" if "validation" in input_path else None
+            if validation_root:
+                create_done_file(validation_root)
 
 def run_detection(config=None, quiet=False):
     path_config = load_config("configs/paths.yaml")
