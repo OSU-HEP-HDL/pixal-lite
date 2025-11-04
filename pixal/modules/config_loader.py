@@ -178,3 +178,10 @@ def create_done_file(directory: str):
         f.write("Fin")
     
     print(f"'done.txt' created at: {file_path}")
+
+def up_to_dir(p, dirname="validation"):
+    p = Path(p)  # accepts str or Path
+    for candidate in [p] + list(p.parents):
+        if candidate.name == dirname:
+            return str(candidate) + "/"
+    return None

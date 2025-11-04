@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from pixal.preprocessing import remove_background, align_images, imagePreprocessor
-from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace,extract_component_name, list_type_dirs, create_done_file
+from pixal.modules.config_loader import load_config, resolve_path, load_and_merge_configs, _dict_to_namespace,extract_component_name, list_type_dirs, create_done_file, up_to_dir
 import subprocess
 import sys
 import os
@@ -144,9 +144,9 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
 
             subprocess.run(args)
 
-            validation_root = input_path.split("/validation/")[0] + "/validation/" if "validation" in input_path else None
-            if validation_root:
-                create_done_file(validation_root)
+        validation_root = up_to_dir(input_path)
+        if validation_root:
+            create_done_file(validation_root)
 
 def run_detection(config=None, quiet=False):
     path_config = load_config("configs/paths.yaml")
