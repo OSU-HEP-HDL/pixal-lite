@@ -80,7 +80,7 @@ def run_validation(input_dir, output_dir, model_dir, quiet=False):
                 logger.info(f"Using default model path: {base_model_path}")
 
             base_input_path = input_path / type_folder.name
-            base_output_path = Path(output_dir) / component_model / type_folder.name
+            base_output_path = Path(output_dir) / type_folder.name
             base_output_path.mkdir(parents=True, exist_ok=True)
 
             output_preprocess = base_output_path / "preprocessing"
