@@ -73,6 +73,36 @@ The sub-directory names should be obvious, however, the only directory names tha
 
 If you need to add or change anything on this list, edit the function `extract_component_name()` in `/pixal/modules/config_loader.py`
 
+The directories are created within the hdl_webpage repository. You will need to add to this list as you add component models to pixa-lite. The function can be found in `/hdl_webpage/utils/proc.py`.
+```
+    # Default mapping (fill in more image types as needed)
+    if component_validation_dirs is None:
+        component_validation_dirs = {
+            "R0_DATA_FLEX_F1": ("R0_DATA_FLEX_F1_F", "R0_DATA_FLEX_F1_B"),
+            "R0_DATA_FLEX_F2": ("R0_DATA_FLEX_F2_F", "R0_DATA_FLEX_F2_B"),
+            "R0_DATA_FLEX_F3": ("R0_DATA_FLEX_F3_F", "R0_DATA_FLEX_F3_B"),
+            "R05_DATA_FLEX_F1": (),
+            "R05_DATA_FLEX_F2": (),
+            "R0_POWER_T_F1": (),
+            "R0_POWER_JUMPER_F2": (),
+            "TYPE0_TO_PP0_F1": (),
+            "TYPE0_TO_PP0_F2": (),
+            "L0_BARREL_POWER_FLEX": (),
+            "L0_BARREL_DATA_FLEX": (),
+            "L1_BARREL_DATA_FLEX_F1": (),
+            "L1_BARREL_DATA_FLEX_F2": (),
+            "L1_BARREL_DATA_FLEX_F3": (),
+            "L1_BARREL_DATA_FLEX_F4": (),
+            "L1_BARREL_POWER_FLEX_F1": (),
+            "L1_BARREL_POWER_FLEX_F2": (),
+            "QUAD_MODULE_Z_RAY_FLEX": (),
+            "QUAD_RING_R1": (),
+            "COUPLED_RING_R01": (),
+            "INTERMEDIATE_RING": (),
+        }
+
+```
+
 ## Results
 
 The reulst that are output from validation consists of mutlple metric plots, however, only one plot will be shown on the UI. The results for our `R0_DATA_FLEX_F1` example are output as such:
